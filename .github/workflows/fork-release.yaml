@@ -52,7 +52,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      CCUSAGE_VERSION: ${{ needs.version.outputs.version }}
       CCUSAGE_PRICING_JSON_PATH: ${{ github.workspace }}/pricing.json
       MACOSX_DEPLOYMENT_TARGET: '11.0'
       ARCH: ${{ matrix.arch }}
@@ -75,9 +74,12 @@ jobs:
       - name: Test
         run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
       - name: Build
+        env:
+          CCUSAGE_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --locked --manifest-path rust/Cargo.toml --release --bin ccusage --target ${{ matrix.target }}
       - name: Package npm-compatible tarball
         env:
+          CCUSAGE_VERSION: ${{ needs.version.outputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
