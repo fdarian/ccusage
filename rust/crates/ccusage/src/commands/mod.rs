@@ -206,7 +206,7 @@ fn load_session_rows(shared: &SharedArgs) -> Result<Vec<UsageSummary>> {
 }
 
 fn run_session_id(id: &str, shared: &SharedArgs) -> Result<()> {
-    let mut entries = load_entries_since(shared, None)?;
+    let mut entries = crate::adapter::claude::load_session_entries(shared, id)?;
     filter_loaded_entries_by_date(&mut entries, shared);
     let mut session_entries = entries
         .into_iter()

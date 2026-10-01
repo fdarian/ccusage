@@ -1,6 +1,82 @@
 use ccusage_test_support::Fixture;
 
 #[test]
+fn session_id_excludes_inherited_history_before_deduplication() {
+    let fixture = Fixture::new();
+    let _transcript = fixture.write_file(
+        "projects/project-a/session-a.jsonl",
+        [
+            r#"{"timestamp":"2026-09-15T12:00:00.000Z","sessionId":"parent","requestId":"request-a","message":{"id":"message-a","model":"claude-sonnet-4-20250514","usage":{"input_tokens":300,"output_tokens":2}}}"#,
+            r#"{"timestamp":"2026-09-15T12:00:01.000Z","sessionId":"session-a","requestId":"request-a","message":{"id":"message-a","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":2}}}"#,
+            r#"{"timestamp":"2026-09-15T12:00:02.000Z","message":{"id":"message-b","model":"claude-sonnet-4-20250514","usage":{"input_tokens":10,"output_tokens":2}}}"#,
+        ]
+        .join("\n"),
+    );
+    let _subagent = fixture.write_file(
+        "projects/project-a/session-a/subagents/agent-a.jsonl",
+        r#"{"timestamp":"2026-09-15T12:00:03.000Z","sessionId":"session-a","message":{"id":"message-c","model":"claude-sonnet-4-20250514","usage":{"input_tokens":20,"output_tokens":2}}}"#,
+    );
+    let _other = fixture.write_file(
+        "projects/project-a/other.jsonl",
+        r#"{"timestamp":"2026-09-15T12:00:04.000Z","sessionId":"session-a","message":{"id":"message-d","model":"claude-sonnet-4-20250514","usage":{"input_tokens":1000,"output_tokens":2}}}"#,
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ccusage"))
+        .env_clear()
+        .env("HOME", fixture.path("home"))
+        .env("CLAUDE_CONFIG_DIR", fixture.root())
+        .env("LOG_LEVEL", "0")
+        .args([
+            "session",
+            "--id",
+            "session-a",
+            "--json",
+            "--offline",
+            "--mode",
+            "display",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["totalTokens"], 136);
+    assert_eq!(report["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(report["entries"][0]["inputTokens"], 100);
+}
+
+#[test]
+fn session_id_dedup_is_local_to_the_requested_session() {
+    let fixture = Fixture::new();
+    let _original = fixture.write_file(
+        "projects/project-a/session-a.jsonl",
+        r#"{"timestamp":"2026-09-15T12:00:00.000Z","sessionId":"session-a","requestId":"request-shared","message":{"id":"message-shared","model":"claude-sonnet-4-20250514","usage":{"input_tokens":300,"output_tokens":2}}}"#,
+    );
+    let _copy = fixture.write_file(
+        "projects/project-a/session-b.jsonl",
+        r#"{"timestamp":"2026-09-15T12:00:00.000Z","sessionId":"session-b","requestId":"request-shared","message":{"id":"message-shared","model":"claude-sonnet-4-20250514","usage":{"input_tokens":100,"output_tokens":2}}}"#,
+    );
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ccusage"))
+        .env_clear()
+        .env("HOME", fixture.path("home"))
+        .env("CLAUDE_CONFIG_DIR", fixture.root())
+        .env("LOG_LEVEL", "0")
+        .args([
+            "session",
+            "--id",
+            "session-b",
+            "--json",
+            "--offline",
+            "--mode",
+            "display",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["totalTokens"], 102);
+    assert_eq!(report["entries"][0]["inputTokens"], 100);
+}
+
+#[test]
 fn session_id_deduplicates_repeated_message_usage() {
     let fixture = Fixture::new();
     let messages = [

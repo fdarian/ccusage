@@ -78,6 +78,37 @@ pub fn usage_files(paths: &[PathBuf], project_filter: Option<&str>) -> Vec<PathB
     files
 }
 
+pub(super) fn session_usage_files(paths: &[PathBuf], session_id: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let transcript_name = format!("{session_id}.jsonl");
+    for path in paths {
+        let Ok(projects) = fs::read_dir(path.join("projects")) else {
+            continue;
+        };
+        for project in projects.filter_map(std::result::Result::ok) {
+            if !project.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let Ok(entries) = fs::read_dir(project.path()) else {
+                continue;
+            };
+            for entry in entries.filter_map(std::result::Result::ok) {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_file() && entry.file_name() == transcript_name.as_str() {
+                    files.push(entry.path());
+                } else if kind.is_dir() && entry.file_name() == session_id {
+                    collect_usage_files(&entry.path(), &mut files);
+                }
+            }
+        }
+    }
+    files.retain(|file| extract_session_parts(file).0 == session_id);
+    files.sort_by_cached_key(|path| path.to_string_lossy().into_owned());
+    files
+}
+
 /// Margin subtracted from the `--since` lower bound before comparing it with
 /// file mtimes. It absorbs the gap between the timezone-resolved bound and
 /// wall-clock mtimes, plus sessions flushed well after the entries they hold.
@@ -340,8 +371,34 @@ mod tests {
 
     use ccusage_test_support::fs_fixture;
 
-    use super::split_files_before_since;
+    use super::{session_usage_files, split_files_before_since};
     use crate::{MILLIS_PER_DAY, TimestampMs, cli::SharedArgs, parse_ts_timestamp};
+
+    #[test]
+    fn discovers_session_owned_files_across_config_roots_and_projects() {
+        let fixture = fs_fixture!({
+            "a/projects/project-a/session-a.jsonl": "{}",
+            "a/projects/project-a/session-a/chat.jsonl": "{}",
+            "a/projects/project-a/session-a/subagents/agent-a.jsonl": "{}",
+            "a/projects/project-a/session-b.jsonl": r#"{"sessionId":"session-a"}"#,
+            "a/projects/project-a/agent-old.jsonl": r#"{"sessionId":"session-a"}"#,
+            "b/projects/project-b/session-a/subagents/agent-b.jsonl": "{}",
+            "b/projects/project-b/session-b/subagents/agent-c.jsonl": "{}",
+        });
+        let files = session_usage_files(&[fixture.path("b"), fixture.path("a")], "session-a");
+        assert_eq!(
+            files,
+            vec![
+                fixture.path("a/projects/project-a/session-a.jsonl"),
+                fixture.path("a/projects/project-a/session-a/chat.jsonl"),
+                fixture.path("a/projects/project-a/session-a/subagents/agent-a.jsonl"),
+                fixture.path("b/projects/project-b/session-a/subagents/agent-b.jsonl"),
+            ]
+        );
+        for id in ["", "..", "../session-a", "session-a/subagents"] {
+            assert!(session_usage_files(&[fixture.path("a")], id).is_empty());
+        }
+    }
 
     fn set_file_modified(path: &Path, timestamp: TimestampMs) {
         let milliseconds = u64::try_from(timestamp.as_millis()).unwrap();

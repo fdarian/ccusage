@@ -73,6 +73,51 @@ pub fn load_entries_since(
     })
 }
 
+pub fn load_session_entries(shared: &SharedArgs, session_id: &str) -> Result<Vec<LoadedEntry>> {
+    progress::track_usage_load(progress::UsageLoadAgent("Claude"), shared.json, || {
+        let files = paths::session_usage_files(&claude_paths()?, session_id);
+        debug_log(
+            shared,
+            format!(
+                "Found {} JSONL files for Claude session {session_id}",
+                files.len()
+            ),
+        );
+        if files.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pricing = if shared.mode == CostMode::Display {
+            None
+        } else {
+            Some(PricingMap::load_with_overrides(
+                shared.offline,
+                log_level() != Some(0),
+                shared.pricing_overrides.iter(),
+            ))
+        };
+        let tz = parse_tz(shared.timezone.as_deref());
+        let loaded_files = read_files_parallel(&files, shared.single_thread, |file| {
+            read_usage_file(file, tz.as_ref(), shared.mode, pricing.as_ref())
+        });
+        let mut indexes = FxHashMap::default();
+        let mut entries = Vec::new();
+        // Filename ownership bounds --id loading; discard inherited parent
+        // history before local dedup, but keep records without a session ID.
+        // Full scans retain their existing cross-session attribution.
+        for entry in loaded_files.into_iter().flat_map(|file| file.entries) {
+            if entry
+                .data
+                .session_id
+                .as_deref()
+                .is_none_or(|id| id == session_id)
+            {
+                push_deduped_entry(entry, &mut indexes, &mut entries);
+            }
+        }
+        Ok(entries)
+    })
+}
+
 /// Loads daily Claude summaries. Summaries dated before `since` may be
 /// missing, so callers must filter them by date.
 pub fn load_daily_summaries(
