@@ -354,10 +354,12 @@ fn calculate_open_code_cost(
     usage: TokenUsageRaw,
     cost_usd: Option<f64>,
     timestamp: Option<crate::TimestampMs>,
-    _mode: CostMode,
+    mode: CostMode,
     pricing: Option<&PricingMap>,
 ) -> f64 {
-    if let Some(cost) = cost_usd.filter(|cost| *cost > 0.0) {
+    if mode != CostMode::Calculate
+        && let Some(cost) = cost_usd.filter(|cost| *cost > 0.0)
+    {
         return cost;
     }
     for candidate in open_code_model_candidates(model, provider) {
@@ -546,6 +548,33 @@ mod tests {
         .unwrap();
 
         assert_eq!(entry.cost, 0.02);
+    }
+
+    #[test]
+    fn calculate_mode_ignores_positive_recorded_opencode_cost() {
+        let mut pricing = PricingMap::default();
+        pricing.load_json(r#"{"gpt-test":{"input_cost_per_token":0.000001,"output_cost_per_token":0.000010,"cache_read_input_token_cost":0.0000001}}"#);
+        let payload = message(json!({
+            "id": "message-a", "sessionID": "session-a", "providerID": "openai",
+            "modelID": "gpt-test", "time": { "created": 0 },
+            "tokens": { "input": 100, "output": 10, "cache": { "read": 50 } },
+            "cost": 9.99
+        }));
+        let calculated = message_value_to_entry(
+            &payload,
+            None,
+            None,
+            None,
+            CostMode::Calculate,
+            Some(&pricing),
+        )
+        .unwrap();
+        assert_eq!(calculated.cost, 0.000205);
+        for mode in [CostMode::Auto, CostMode::Display] {
+            let recorded =
+                message_value_to_entry(&payload, None, None, None, mode, Some(&pricing)).unwrap();
+            assert_eq!(recorded.cost, 9.99);
+        }
     }
 
     #[test]
