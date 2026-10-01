@@ -1,0 +1,131 @@
+name: Fork binary release
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.repository == 'fdarian/ccusage'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import tomllib
+
+          with open("rust/Cargo.toml", "rb") as manifest:
+              base = tomllib.load(manifest)["workspace"]["package"]["version"]
+          version = f"{base}-fdarian.{os.environ['RUN_NUMBER']}"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\ntag=v{version}\n")
+          PY
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: arm64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CCUSAGE_VERSION: ${{ needs.version.outputs.version }}
+      CCUSAGE_PRICING_JSON_PATH: ${{ github.workspace }}/pricing.json
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download pinned pricing snapshot
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          with open("flake.lock") as source:
+              locked = json.load(source)["nodes"]["litellm"]["locked"]
+          url = f"https://raw.githubusercontent.com/{locked['owner']}/{locked['repo']}/{locked['rev']}/model_prices_and_context_window.json"
+          urllib.request.urlretrieve(url, os.environ["CCUSAGE_PRICING_JSON_PATH"])
+          PY
+      - name: Test
+        run: cargo test --locked --manifest-path rust/Cargo.toml --workspace
+      - name: Build
+        run: cargo build --locked --manifest-path rust/Cargo.toml --release --bin ccusage --target ${{ matrix.target }}
+      - name: Package npm-compatible tarball
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          binary="rust/target/$TARGET/release/ccusage"
+          test "$("$binary" --version)" = "ccusage $CCUSAGE_VERSION"
+          mkdir -p staging/package/bin assets
+          cp "$binary" staging/package/bin/ccusage
+          python3 - <<'PY'
+          import json
+          import os
+
+          with open(f"packages/ccusage-darwin-{os.environ['ARCH']}/package.json") as source:
+              package = json.load(source)
+          package["version"] = os.environ["CCUSAGE_VERSION"]
+          with open("staging/package/package.json", "w") as output:
+              json.dump(package, output, indent=2)
+              output.write("\n")
+          PY
+          tar -czf "assets/ccusage-darwin-$ARCH.tgz" -C staging package/bin/ccusage package/package.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ccusage-darwin-${{ matrix.arch }}
+          path: assets/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.version.outputs.tag }}
+      RELEASE_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ccusage-darwin-*
+          path: assets
+          merge-multiple: true
+      - name: Publish binary release
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          sha256sum ccusage-darwin-arm64.tgz ccusage-darwin-x64.tgz > SHA256SUMS
+          gh release create "$TAG" ccusage-darwin-arm64.tgz ccusage-darwin-x64.tgz SHA256SUMS \
+            --target "$RELEASE_SHA" --title "$TAG" --prerelease \
+            --notes 'Fork build: targeted OpenCode session ID lookup and token-based API pricing in calculate mode. Tarballs use the npm platform package layout: package/bin/ccusage.'
