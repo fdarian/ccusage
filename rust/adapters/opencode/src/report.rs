@@ -27,6 +27,14 @@ fn report_from_rows(rows: &[crate::UsageSummary], kind: AgentReportKind) -> Valu
     })
 }
 
+pub(crate) fn session_detail_json(entries: &[LoadedEntry]) -> Result<Value> {
+    let rows = summarize_entries(entries, AgentReportKind::Session)?;
+    match rows.as_slice() {
+        [row] => Ok(agent_summary_json(row, AgentReportKind::Session, false)),
+        _ => Err(crate::cli_error("Expected exactly one OpenCode session")),
+    }
+}
+
 pub fn summarize_entries(
     entries: &[LoadedEntry],
     kind: AgentReportKind,

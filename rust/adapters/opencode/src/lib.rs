@@ -28,8 +28,25 @@ pub fn has_data() -> bool {
 pub fn run(args: AgentCommandArgs) -> Result<()> {
     let kind = args.kind;
     let shared = args.shared;
-    let mut entries = loader::load_entries(&shared, kind)?;
+    let mut entries = match args.session_id.as_deref() {
+        Some(id) => loader::load_session_entries(&shared, id)?,
+        None => loader::load_entries(&shared, kind)?,
+    };
     filter_loaded_entries_by_date(&mut entries, &shared);
+    if let Some(id) = args.session_id.as_deref() {
+        if entries.is_empty() {
+            return Err(cli_error(format!(
+                "No OpenCode session found with ID: {id}"
+            )));
+        }
+        if wants_json(&shared) {
+            return print_json_or_jq(
+                report::session_detail_json(&entries)?,
+                shared.jq.as_deref(),
+                shared.no_cost,
+            );
+        }
+    }
     if wants_json(&shared) {
         return print_json_or_jq(
             report_json(&entries, kind, &shared.order)?,

@@ -263,13 +263,7 @@ fn parse_command(
         }
         "claude" => parse_claude_command(parser, shared, config, default_session_duration_hours),
         "codex" => parse_codex_command(parser, shared, config),
-        "opencode" => parse_basic_agent_command(
-            parser,
-            shared,
-            "opencode",
-            OPENCODE_AGENT_REPORTS,
-            Command::OpenCode,
-        ),
+        "opencode" => parse_opencode_command(parser, shared),
         "amp" => {
             parse_basic_agent_command(parser, shared, "amp", STANDARD_AGENT_REPORTS, Command::Amp)
         }
@@ -633,6 +627,27 @@ fn parse_codex_command(
         open_claw_path: None,
         codex_speed,
     }))
+}
+
+fn parse_opencode_command(
+    parser: &mut ArgParser,
+    mut shared: SharedArgs,
+) -> Result<Command, String> {
+    let kind = parse_agent_report_kind(parser, "opencode", OPENCODE_AGENT_REPORTS)?;
+    let mut args = agent_command_args(shared.clone(), kind);
+    while parser.peek().is_some() {
+        if parse_shared_arg_for_command(parser, &mut shared)? {
+            continue;
+        }
+        match parser.next_flag()?.as_str() {
+            "-i" | "--id" if kind == AgentReportKind::Session => {
+                args.session_id = Some(parser.value_for("--id")?)
+            }
+            flag => return Err(format!("Unknown opencode option '{flag}'")),
+        }
+    }
+    args.shared = shared;
+    Ok(Command::OpenCode(args))
 }
 
 fn parse_pi_command(

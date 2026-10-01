@@ -852,6 +852,16 @@ fn contextual_codex_session_help_lists_id_option() {
 }
 
 #[test]
+fn contextual_opencode_session_help_lists_id_option() {
+    let help = help_text_for_args(&[
+        "ccusage".to_string(),
+        "opencode".to_string(),
+        "session".to_string(),
+    ]);
+    assert!(help.contains("-i, --id <id>"));
+}
+
+#[test]
 fn contextual_help_strips_path_like_program_name() {
     let help = help_text_for_args(&[
         "/usr/local/bin/ccusage".to_string(),
@@ -1332,6 +1342,33 @@ fn parses_opencode_weekly_options() {
     };
     assert_eq!(args.kind, AgentReportKind::Weekly);
     assert!(args.shared.json);
+}
+
+#[test]
+fn parses_opencode_session_id_filter() {
+    for flag in ["--id", "-i"] {
+        let cli = parse(&[
+            "ccusage",
+            "opencode",
+            "session",
+            flag,
+            "ses_target",
+            "--json",
+        ]);
+        let Some(Command::OpenCode(args)) = cli.command else {
+            panic!("expected opencode command");
+        };
+        assert_eq!(args.session_id.as_deref(), Some("ses_target"));
+        assert!(args.shared.json);
+    }
+}
+
+#[test]
+fn rejects_opencode_id_filter_outside_session_report() {
+    assert_eq!(
+        parse_error(&["ccusage", "opencode", "daily", "--id", "ses_target"]),
+        "Unknown opencode option '--id'"
+    );
 }
 
 #[test]
